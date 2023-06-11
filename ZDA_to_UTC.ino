@@ -1,56 +1,59 @@
-// GNZDA_to_UTC, Transforme le message NMEA "$GNZDA,Time,Date" en message "$UTC,Date,Timee" pour simuler ce message non standard Applanix.
+// GNZDA_to_UTC, Transforme le message NMEA "$GNZDA,Time,Date" en message "$UTC,Date,Timee" pour simuler ce message non standard NMEA d'Applanix.
 //
 // Auteur : Bruno Dionne 2023-06-04
 //
 // Suggestion d'interconnexion *****
 //
-// U-Blox ZED-F9R <---> Artemis Thing PLus --------------> DataLogger.
-// TX UART1       ----> RX Serial1 TX  ------------------> RX DataLogger.
+// U-Blox ZED-F9R <--uart1--> Artemis Thing PLus   ------------------> DataLogger.
+// U-Blox ZED-F9R <--QWIIC--> Artemis Thing PLus   ------------------> DataLogger.
+// U-Blox ZED-F9R <- uart2--> Serial to Bluetooh   ------------------> Ordinateur, Tablette ou Mobile
+//
+// TX UART1       ----> RX Serial1, TX Serial1  ------------------> RX DataLogger.
 //
 // TX/RX UART2    <---> Module Bluetooth 4.0 SPP     <---> SPP Téléphone/Tablette.
 // i2c QWIIC      <---> i2c QWIIC Artemis thing plus <---> Librairie "SparkFun_u-blox_GNSS_v3"
 //
 // Artemis thing plus particulatités ***** 
 //
-// Serial   est le premier port série via USB
-// Serial1  est le deuxième port série via les broches TX et RX
+// Serial   est le port série UART via le port USB-C.
+// Serial1  est l'autre port série UART via les broches TX et RX.
 // Module Bluetooth BLE intégré pour envoyer ou recevoir des données de surveillance, des commandes de contrôle ou autres à une tablette ou un téléphone intelligent.
-// Ne pas connecter ni la broche 3.3V ni la broche GND du connecteur QWIIC i2c au ZED-F9R ou à n'importe quoi connecté au ZED-F9R. Cela cause des délais inexplicables dans l'échange de données UART.
+// Ne pas connecter ni la broche 3.3V ni la broche GND du connecteur QWIIC i2c au ZED-F9R ou à n'importe quoi connecté au ZED-F9R. Cela cause des délais inexplicables dans le traitmenet des données UART.
 //
 // Fonctionnement général :
-//     Lire les messages NMEA du GPS qui arrivent en bloc/cohorte synchro avec le signal PPS.
-//     On note le temps d'arrivée du premier caractère '$' reçus pour estimé au mieux la syncho avec le signal PPS
-//     Chaque caratère reçu est immédiatement renvoyé vers le data loggeur avec le minimum de délais. 
-//     Le message en cours de réception est stoké en mémoire temporairement pour un éventuel traitement un fois que ce message est entièrement reçu.
+//     Lire les messages NMEA du GPS qui arrivent en bloc juste après le signal PPS associé.
+//     On note le temps d'arrivée du premier caractère '$' reçus pour estimé au mieux le déalais avec le signal PPS.
+//     Chaque caratère reçu est immédiatement renvoyé sans traitement vers le data loggeur. 
+//     Le message NMEA en cours de réception est stocké en mémoire temporairement pour traitement futur.
 //     Le dernier message reçu est $GNZDA, avec l'heure et la date UTC.
-//     On note le temps d'arrivée du dernier caractère reçu pour estime le temps de transit de la cohorte de message
-//     À partir du message $GNZDA en mémoire on contruit un nouveau message $UTC,Date,Heure au format Applanix.
-//     On incrémente l'heure UTC du temps de transit de la cohorte pour estimé au plus proche (± 0.5 milliseconde) l'heure UTC réelle de la transmission du message $UTC
+//     On note le temps d'arrivée du dernier caractère reçu pour estime le temps de transit du bloc de message NMEA.
+//     À partir du message $GNZDA stocké en mémoire, on contruit le nouveau message $UTC,Date,Heure au format Applanix.
+//     On incrémente l'heure UTC du temps de transit du bloc de messages et délais PPS/Bloc messages NMEA, pour estimé au plus proche (± 0.5 milliseconde) l'heure UTC réelle de la transmission du message $UTC
 //        Il est possible dans le code d'ajouter un offset supplémentaire à l'heure UTC, pour tenir compte du temps de traitement du message UTC par le Data Loggeur.
 //
-//     Une cohorte de messages se traite en 45 millisecondes, il est possible de supporter le refresh maximal de 10 Hz du ZED-F9R.
-//     Pour un total de 450 milleseondes de traitement à chaque seconde.
+//     Un bloc de message NMEA se traite en 45 millisecondes en moyenne, il est donc possible de supporter le refresh maximal de 10 Hz du ZED-F9R.
+//     Pour un total de 450 millesecondes de traitement entre chaque PPS.
 //     Ce qui laisse un marge de manoeuvre pour ajouter d'autres fonctions personnalisées.
 //
 // Développement furtur :
 //     Synchroniser l'horloge en temp réel RTC du Artemis thing plus avec le temps UTC aux fins de validations et vérification (GPS time anti spoofing).
-//     Ajouter une interruption pour noter en temp réel le signal PPS TTL du ZED-F9R pour pouvoir mieux ajuster l'heure du message $UTC.
-//     Ajouter une fonction au bouton usager du Artemis Thing Plus pour des fonctionnalités supplémentaires 
+//     Ajouter une fonction au bouton usager du Artemis Thing Plus pour des fonctionnalités supplémentaires. 
 //     Ajouter une interruption pour capturer des alarmes de l'horloge en temps réeal RTC du Artémis Thing PLus pour des fonctionnalités supplémentaires.
-//     Ajouter des sondes externes pour supporter plus de mesages NMEA 2000.
+//     Ajouter des sondes externes pour supporter plus de type de messages NMEA.
 //     
-// include section  *****
+//
+// ***** Include section  *****
 //
 //
 #include <Arduino.h>          // Librairies, variables et constantes standards Arduino.
 #include <SPI.h>              // used for SPI communication.
 #include <Wire.h>             // Used for serial communication over USB //Needed for I2C to GNSS.
-//#include "RTC.h"            // Real time clock. The RTC library included with the Arduino_Apollo3 core. Pas utilisé pour le moment
-#include "WDT.h"            // Watchdog disabled, it's interrupt routine is too slow and disturn the serial data flow from the ZED-F9R
-//#include <ArduinoBLE.h>     // Module intégré Bluetooth BLE du Artemis thing plus.
+//#include "RTC.h"            // Real time clock. The RTC library included with the Arduino_Apollo3 core. Pas utilisé pour le moment.
+#include "WDT.h"              // Watchdog library
+//#include <ArduinoBLE.h>     // Module intégré Bluetooth BLE du Artemis thing plus. Pas utiliser pour le moment.
 //
 //
-// U-blox Sparkfun library section optional *****
+// ***** U-blox Sparkfun library section optional *****
 //
 //
 //#include <SparkFun_u-blox_GNSS_v3.h> //http://librarymanager/All#SparkFun_u-blox_GNSS_v3
@@ -60,10 +63,10 @@
 //#define gnssAddress 0x42 // The default I2C address for u-blox modules is 0x42. Change this if required
 //
 //
-// define section *****
+// ***** Define section *****
 //
 //
-// Constant section *****
+// ***** Constant section *****
 //
 //
 // Arduino boards typically define 'LED_BUILTIN'
@@ -81,73 +84,55 @@ const int buttonIntPin     = 10;   // Button pin
 const int resetPin         =  6;   // Cette pin est reliée à la pin RESET;
 //
 //
-// Variable section *****
+// ***** Variable section *****
 //
 //
-// ISR variables
+// ***** ISR variables
 //
 volatile bool alarmISR_  = false; //this value set to true if Apollo RealTime Clock trigger an interrupt service routine.
 volatile bool buttonISR_ = false; //this value set to true if Apollo button is pushed
 volatile bool ppsISR_    = false; //this value set to true if GPS PPS is detected
-
+//
 volatile bool watchdogFlag = false; // Watchdog Timer ISR flag
 volatile int watchdogInterrupt = 0; // Watchdog interrupt counter
 //
+// ***** Other variables 
 //
-// other variables
-//
-//
-// object section
+// ***** Object section *****
 //
 //
-/*********************************************************/
-//
-// Subroutine section
+///*********************************************************/
 //
 //
-//interrupt service routine, called each time the AS3935 reports an event by pulling IRQ pin high.
+// ***** Subroutine section *****
 //
 //
 // interrupt service routine, called each time the button is press.
 //
 //
-void ButtonISR()                     // Usage futur de détection du bouton. Ex: Déclencher un traitement si le bouton est poussé par un usager.     ± 0.5 millisecondes    
+void ButtonISR()                     // Usage futur de détection du bouton. Ex: Déclencher un traitement si le bouton est poussé par un usager.
 {
   buttonISR_ = true;
 }
 //
 //
 volatile unsigned long eventPPS = 0;
-void ppsISR()                       // Usage futur de signal PPS du GPS. Ex: Noter précisément le déclenchement du signal PPS. ± 0.5 millisecondes    
+void ppsISR()                       // Noter le temps d'arrivée du signal PPS.
 {
   eventPPS = millis();
   ppsISR_ = true;
 }
 //
-// Call back interrupt service routine, called each time the real time clock reports an alarm.
-// I think this board specific to Sparkfun Artemis Thins Plus
 //
 extern "C" void am_rtc_isr(void)     // Usage futur de l'horloge en temp réel du Artemis thing plus. Ex: déclenchement d'un traitement par une alarme de l'horloge  ± 4 microsecondes.
 { 
-  // Clear the RTC alarm interrupt
+  // Effacer RTC alarm interrupt
   am_hal_rtc_int_clear(AM_HAL_RTC_INT_ALM);
-  alarmISR_ = true;  // don't know if Apollo3 RTC is using any pin to reports an alarm
+  alarmISR_ = true;  
 }
 //
 //
-// Interrupt handler for the watchdog. Ceate too much distrubance to the fast flow of NMEA strings from the ZED-F9R, do not use.
-//
-//extern "C" void am_watchdog_isr(void)   // Re rien faire juste attendre le reboot
-//{
-//}
-//
-//
-// Fonction pour faire un reset software du Artemis. Ne pas utliser le Artemis gèle indéfiniment;
-//
-//void(* resetFunc) (void) = 0;  //defines a pointer to a function, and sets that pointer to zero, so when you call the function, you transfer control to the reset vector at address zero.
-//
-//
-// +++++ Called once when the board is powered up or reset +++++
+// ***** Appelé une fois dans le MCU est alimenté ou reset *****
 //
 //
 void setup() { 
@@ -174,9 +159,9 @@ void setup() {
 }
 //
 //
-//****************************************************************************************
-// !!!!! After "setup()", "loop()" will loop forever when board running !!!!!
-//****************************************************************************************
+//******************************************************************************************
+// !!!!! Après "setup()", "loop()" est une boucle infinie tant que le MCU est alimenté !!!!!
+//******************************************************************************************
 //
 //
 void loop() { // La boucle loop() est trop lente pour des SBC de moins de 16 MHz. Mais le Artemis Thing Plus est à 48 MHz
@@ -292,7 +277,7 @@ void loop() { // La boucle loop() est trop lente pour des SBC de moins de 16 MHz
         Serial.print( DeltaUTC );   
         Serial.print ( "                Nombre de DeltaUTC overflow = " );
         Serial.println( overflowDeltaUTC );
-        if ( overflowDeltaUTC > 10 ){
+        if ( overflowDeltaUTC > 5 ){
           delay(250);
           //digitalWrite(resetPin, LOW);                    // Le board Artemis est resetté, l'éxécution s'arrête ici et reprendra à "void setup()""
           wdt.start();                                        // Le board Artemis est RESET par le Watchdog timer après   ?? secondes (valeur par défaut de WDT)
@@ -318,7 +303,7 @@ void loop() { // La boucle loop() est trop lente pour des SBC de moins de 16 MHz
 } // end loop
 //
 //
-// ++++++++++ END OF PROGRAM ++++++++++
+// ++++++++++ FIN DU PROGRAMME ++++++++++
 //
 //
 // Note pour la section loop()  *****
@@ -343,10 +328,10 @@ void loop() { // La boucle loop() est trop lente pour des SBC de moins de 16 MHz
 //   Serial.readBytes()
 //   Serial.readBytesUntil()
 //
-// Because the Arduino has very little RAM the String class can cause corruption. There are plenty of useful string functions insted http://www.cplusplus.com/reference/cstring/
+// Les MCU Arduino ont généralement très peu de mémoire RAM. La string class cause possiblement des corruption sde mémoire. Voir les alternatives ici avec des fcontions des librairies "C"http://www.cplusplus.com/reference/cstring/
 //
 // char myChar = 'A';
-// char myChar = 65; // both are equivalent
+// char myChar = 65; // Les deux sont équivalent
 //
 // Opérateurs logiques
 //
@@ -369,3 +354,6 @@ void loop() { // La boucle loop() est trop lente pour des SBC de moins de 16 MHz
 // le ratio de 46.85 divise par 47 donne 0,9973 
 // Donc un tick d'une durée supposé de 1 millisecondes est en réalité 0.9973 milliseconde.
 // Donc 1 000 millisecondes multiplié par le ratio 0,9773 et arrondis donne 977 tick de simili millisecondes pour une durée réelle de 1 000 millisecondes.
+//
+//
+// ***** LA VRAI FIN *****
