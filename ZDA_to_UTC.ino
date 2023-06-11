@@ -42,7 +42,7 @@
 //     Ajouter des sondes externes pour supporter plus de type de messages NMEA.
 //     
 //
-// ***** Include section  *****
+// ***** Include  *****
 //
 //
 #include <Arduino.h>          // Librairies, variables et constantes standards Arduino.
@@ -53,7 +53,7 @@
 //#include <ArduinoBLE.h>     // Module intégré Bluetooth BLE du Artemis thing plus. Pas utiliser pour le moment.
 //
 //
-// ***** U-blox Sparkfun library section optional *****
+// ***** U-blox Sparkfun librairie optionellle *****
 //
 //
 //#include <SparkFun_u-blox_GNSS_v3.h> //http://librarymanager/All#SparkFun_u-blox_GNSS_v3
@@ -63,51 +63,51 @@
 //#define gnssAddress 0x42 // The default I2C address for u-blox modules is 0x42. Change this if required
 //
 //
-// ***** Define section *****
+// ***** Define *****
 //
 //
-// ***** Constant section *****
+// ***** Constant *****
 //
 //
-// Arduino boards typically define 'LED_BUILTIN'
-// This symbol expands to the pin_size_t corresponding to the onboard LED
+// Habituellement les SBC Arduino définissent 'LED_BUILTIN'
+// Ce symbole est associé à la broche pin_size_t qui est la LED embarquée.
 //
-const pin_size_t ledPinNumber = LED_BUILTIN;  //By number
+const pin_size_t ledPinNumber = LED_BUILTIN;  //LED par son numéro de broche
 //
 // Mbed boards use a PinName called LED1 to indicate the built-in LED
 //
 const PinName ledPinName = LED1;  // By name
 //
-const int ppsIntPin        =  5;   // Interrupt pin for PPS detection. Je l'utilise aussi pour le chip détecteur d'éclair.
-const int spiChipSelectPin =  9;   // Chip select pin 
-const int buttonIntPin     = 10;   // Button pin
-const int resetPin         =  6;   // Cette pin est reliée à la pin RESET;
+const int ppsIntPin        =  5;   // Numéro de la broche pour l'Interruption  de détection du signal PPS
+const int spiChipSelectPin =  9;   // Numéro de la broche pour Chip select du port SPI
+const int buttonIntPin     = 10;   // Numéro de la broche pour le "user button" 
+const int resetPin         =  6;   // Numéro de la broche reliée à la broche RESET du GPS et ou du Artemis thing plus au choix.
 //
 //
-// ***** Variable section *****
+// ***** Variable  *****
 //
 //
-// ***** ISR variables
+// ***** Variable pour les interruption ISR
 //
-volatile bool alarmISR_  = false; //this value set to true if Apollo RealTime Clock trigger an interrupt service routine.
-volatile bool buttonISR_ = false; //this value set to true if Apollo button is pushed
-volatile bool ppsISR_    = false; //this value set to true if GPS PPS is detected
+volatile bool alarmISR_  = false; // Cette variable est assignée à true si l'horloge interne du Apollo génère une interruption ex: "alarme".
+volatile bool buttonISR_ = false; // Cette variable est assigné à true si on appui sur le "user button".
+volatile bool ppsISR_    = false; // Cette variable est assigné à true si le signal PPS en provenance du GPS est détectée.
 //
-volatile bool watchdogFlag = false; // Watchdog Timer ISR flag
-volatile int watchdogInterrupt = 0; // Watchdog interrupt counter
+volatile bool watchdogFlag = false; // indicateur Watchdog Timer ISR flag
+volatile int watchdogInterrupt = 0; // Compteur Watchdog interrupt counter
 //
-// ***** Other variables 
+// ***** autres variables 
 //
-// ***** Object section *****
+// ***** Object  *****
 //
 //
 ///*********************************************************/
 //
 //
-// ***** Subroutine section *****
+// ***** Souroutines *****
 //
 //
-// interrupt service routine, called each time the button is press.
+// Routines de gestion des interruptions
 //
 //
 void ButtonISR()                     // Usage futur de détection du bouton. Ex: Déclencher un traitement si le bouton est poussé par un usager.
@@ -155,6 +155,7 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);                                         // Gestion de la LED bleue à OFF.  
   attachInterrupt(digitalPinToInterrupt(ppsIntPin), ppsISR, RISING);    // Le ZED-F9R will pull the interrupt pin HIGH when a PPS event is triggered.
   Serial.println(", PPS Interrupt=OK" );                                // Confirmer le mise en place de l'interruption
+  wdt.stop();
   delay(500);                                                           // Attendre que le ZED-F9R se stabilise.    
 }
 //
