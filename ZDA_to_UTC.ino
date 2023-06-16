@@ -189,7 +189,13 @@ void loop() { // La boucle loop() est trop lente pour des SBC d'une fréquence <
     ppsISR_ = false;                              // indiqué que le traitement PPS est fait.
     //Serial1.write('~');
     digitalWrite(LED_BUILTIN, HIGH);              // Allumer la LED bleue pour indiquer l'arrivé du signal PPS.
-    Serial.print( "PPS" );
+    Serial.write( "PPS -> ");
+    Serial.write( "$UTC,");                // $UTC,  Nom du message     
+    Serial.write( &utcDate[0], 9);         // AAAAMMJJ,
+    Serial.write( &utcTime[0], 7);        // HHMMSS.
+    Serial.write( " + DeltaUTC de ");
+    Serial.print( DeltaUTC );
+    Serial.println( " mS.");
   }//endif ppsISR
   //
   if( Serial1.available()) {                                  // Caractères disponibles en provenance du GPS.
@@ -221,13 +227,13 @@ void loop() { // La boucle loop() est trop lente pour des SBC d'une fréquence <
     if ( debutNMEA &&  finNMEA ) {  // Le message NMEA courant est complet.
       // Message $GNRMC
       if (receivedChars[0] == '$' && receivedChars[1] == 'G' && receivedChars[2] == 'N' && receivedChars[3] == 'R' && receivedChars[4] == 'M' && receivedChars[5] == 'C' && receivedChars[6] == ',' ) { // Message "$GNRMC," détecté. Extraire l'heure UTC.
-        /*utcTime[0] = receivedChars[7];        //H
+        utcTime[0] = receivedChars[7];          //H
         utcTime[1] = receivedChars[8];          //H
         utcTime[2] = receivedChars[9];          //M
         utcTime[3] = receivedChars[10];         //M
         utcTime[4] = receivedChars[11];         //S
         utcTime[5] = receivedChars[12];         //S
-        utcTime[6] = receivedChars[13];         //.  on sauve des mS en utilisant directement receivedChars */
+        utcTime[6] = receivedChars[13];         //.  on sauve des mS en utilisant directement receivedChars 
         // À partir d'ici nous avons la date et l'heure UTC, nous pouvons construire et envoyer le message $UTC.
         Serial1.write( "$UTC,");                // $UTC,  Nom du message     
         Serial1.write( &utcDate[0], 9);         // AAAAMMJJ,
