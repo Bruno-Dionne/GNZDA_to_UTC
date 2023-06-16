@@ -1,45 +1,46 @@
-// GNZDA_to_UTC, Transforme le message NMEA "$GNZDA,Time,Date" en message "$UTC,Date,Timee" pour simuler ce message non standard NMEA d'Applanix.
+// GNZDA_to_UTC, à partir du message NMEA "$GNZDA,Time,Date" envoyer le message "$UTC,Date,Timee" pour simuler ce message non standard d'Applanix "tm".
 //
-// Auteur : Bruno Dionne 2023-06-04
+// Promoteur   : Raphaël Mabit 
+// Auteur      : Bruno Dionne 2023-06-04
+// Motivation  : Un data loggeur commercial avec 8 ports série, refuse de fonctionner tant que le message GPS non standard "$UTC,<date>,<time>" n'est pas reçu à intervalle régulier.
+//               Ce Sketch Arduino insère de manière transparente le message $UTC aux autres messages NMEA.
+//               Le message $UTC est contruit à partir du message $GNZDA pour la date et $GNRMC pour l'heure.
+//               Le programme prends en compte le temps de réception, de transmission et de traitement des messages NMEA et ajoute cette correction au temp sUTC du message $UTC
+//               Le temps UTC du message $UTC lorsqu'il est reçu par le data loggeur externe est donc à ± 0.567 mS du temps réel d'émission du signal PPS par le GPS.
+//               Il est donc raisonnable de considérer le message $UTC comme une excellente approximation du signal PPS quand il n'est pas possible d'avoir au signal PPS original.
 //
 // Suggestion d'interconnexion *****
 //
-// U-Blox ZED-F9R <--uart1--> Artemis Thing PLus   ------------------> DataLogger.
-// U-Blox ZED-F9R <--QWIIC--> Artemis Thing PLus   ------------------> DataLogger.
-// U-Blox ZED-F9R <- uart2--> Serial to Bluetooh   ------------------> Ordinateur, Tablette ou Mobile
+//  U-Blox ZED-F9R <--uart1--> Artemis Thing PLus   ------------------> DataLogger.
+//  U-Blox ZED-F9R <--QWIIC--> Artemis Thing PLus  
+//  U-Blox ZED-F9R <- uart2--> Serial to Bluetooh  <------------------> Ordinateur, Tablette ou Mobile
 //
-// TX UART1       ----> RX Serial1, TX Serial1  ------------------> RX DataLogger.
+//  GPS TX UART1  ----> RX Serial1 (Artemis thing plus) TX Serial1 ---> RX DataLogger.
 //
-// TX/RX UART2    <---> Module Bluetooth 4.0 SPP     <---> SPP Téléphone/Tablette.
-// i2c QWIIC      <---> i2c QWIIC Artemis thing plus <---> Librairie "SparkFun_u-blox_GNSS_v3"
+//  TX/RX UART2    <---> Module Bluetooth 4.0 SPP     <---> SPP Téléphone/Tablette.
+//  i2c QWIIC      <---> i2c QWIIC Artemis thing plus <---> Librairie "SparkFun_u-blox_GNSS_v3"
 //
-// Artemis thing plus particulatités ***** 
+//  Artemis thing plus particulatités ***** 
 //
-// Serial   est le port série UART via le port USB-C.
-// Serial1  est l'autre port série UART via les broches TX et RX.
-// Module Bluetooth BLE intégré pour envoyer ou recevoir des données de surveillance, des commandes de contrôle ou autres à une tablette ou un téléphone intelligent.
-// Ne pas connecter ni la broche 3.3V ni la broche GND du connecteur QWIIC i2c au ZED-F9R ou à n'importe quoi connecté au ZED-F9R. Cela cause des délais inexplicables dans le traitmenet des données UART.
+//  Serial  est le port série UART via le port USB-C.
+//  Serial1 est l'autre port série UART via les broches TX et RX.
+//  Module Bluetooth BLE intégré pour envoyer ou recevoir des données de surveillance, des commandes de contrôle ou autres à une tablette ou un téléphone intelligent. (Pas utilisé dans ce Sketch).
 //
 // Fonctionnement général :
-//     Lire les messages NMEA du GPS qui arrivent en bloc juste après le signal PPS associé.
-//     On note le temps d'arrivée du premier caractère '$' reçus pour estimé au mieux le déalais avec le signal PPS.
-//     Chaque caratère reçu est immédiatement renvoyé sans traitement vers le data loggeur. 
-//     Le message NMEA en cours de réception est stocké en mémoire temporairement pour traitement futur.
-//     Le dernier message reçu est $GNZDA, avec l'heure et la date UTC.
-//     On note le temps d'arrivée du dernier caractère reçu pour estime le temps de transit du bloc de message NMEA.
-//     À partir du message $GNZDA stocké en mémoire, on contruit le nouveau message $UTC,Date,Heure au format Applanix.
-//     On incrémente l'heure UTC du temps de transit du bloc de messages et délais PPS/Bloc messages NMEA, pour estimé au plus proche (± 0.5 milliseconde) l'heure UTC réelle de la transmission du message $UTC
-//        Il est possible dans le code d'ajouter un offset supplémentaire à l'heure UTC, pour tenir compte du temps de traitement du message UTC par le Data Loggeur.
-//
-//     Un bloc de message NMEA se traite en 45 millisecondes en moyenne, il est donc possible de supporter le refresh maximal de 10 Hz du ZED-F9R.
-//     Pour un total de 450 millesecondes de traitement entre chaque PPS.
-//     Ce qui laisse un marge de manoeuvre pour ajouter d'autres fonctions personnalisées.
+// 
+//  Horodater la détection du signal PPS en provenance du GPS
+//  Lire les messages NMEA du GPS qui arrivent en bloc juste après le signal PPS.
+//  Chaque caratère reçu est immédiatement renvoyé sans autres traitements vers le data loggeur. 
+//  Prendre en note la date UTC à partir du message $GNZDA
+//  Prendre en note l'heure UTC à partir du message $GNRMC
+//  Dès la réception complète du message $GNRMC, construction et expédition du messge $UTC avec la correction pour les temps de traitement.
+//  Le programme est optimisé pour des messages NMEA de positionnement à 1 Hz seulement. Si vous voulez avoir plus de 1 Hz vous devez modifier le programme.
 //
 // Développement furtur :
-//     Synchroniser l'horloge en temp réel RTC du Artemis thing plus avec le temps UTC aux fins de validations et vérification (GPS time anti spoofing).
-//     Ajouter une fonction au bouton usager du Artemis Thing Plus pour des fonctionnalités supplémentaires. 
+//     Synchroniser l'horloge en temp réel RTC du Artemis thing plus avec le temps UTC aux fins de validation et vérification (GPS time anti spoofing).
+//     Ajouter une fonction au bouton usager du Artemis Thing Plus pour des fonctionnalités supplémentaires (Ex: Start/Stop ou Avec ou sans $UTC, etc. ). 
 //     Ajouter une interruption pour capturer des alarmes de l'horloge en temps réeal RTC du Artémis Thing PLus pour des fonctionnalités supplémentaires.
-//     Ajouter des sondes externes pour supporter plus de type de messages NMEA.
+//     Ajouter des sondes externes pour supporter plus de type de messages NMEA (Magnetomètre, Temperature, Humidité, Salinité, Pression, etc.).
 //     
 //
 // ***** Include  *****
@@ -48,12 +49,12 @@
 #include <Arduino.h>          // Librairies, variables et constantes standards Arduino.
 #include <SPI.h>              // used for SPI communication.
 #include <Wire.h>             // Used for serial communication over USB //Needed for I2C to GNSS.
-//#include "RTC.h"            // Real time clock. The RTC library included with the Arduino_Apollo3 core. Pas utilisé pour le moment.
-#include "WDT.h"              // Watchdog library
-//#include <ArduinoBLE.h>     // Module intégré Bluetooth BLE du Artemis thing plus. Pas utiliser pour le moment.
+//#include "RTC.h"            // Real time clock. The RTC library included with the Arduino_Apollo3 core (Pas utilisé pour le moment).
+//#include "WDT.h"            // Watchdog library (Pas utilisé pour le moment).
+//#include <ArduinoBLE.h>     // Module intégré Bluetooth BLE du Artemis thing plus.(Pas utilisé pour le moment).
 //
 //
-// ***** U-blox Sparkfun librairie optionellle *****
+// ***** U-blox Sparkfun librairie en option ***** (Pas utilisé pour le moment).
 //
 //
 //#include <SparkFun_u-blox_GNSS_v3.h> //http://librarymanager/All#SparkFun_u-blox_GNSS_v3
@@ -76,12 +77,13 @@ const pin_size_t ledPinNumber = LED_BUILTIN;  //LED par son numéro de broche
 //
 // Mbed boards use a PinName called LED1 to indicate the built-in LED
 //
-const PinName ledPinName = LED1;  // By name
+const PinName ledPinName = LED1;   // By name
 //
 const int ppsIntPin        =  5;   // Numéro de la broche pour l'Interruption  de détection du signal PPS
 const int spiChipSelectPin =  9;   // Numéro de la broche pour Chip select du port SPI
 const int buttonIntPin     = 10;   // Numéro de la broche pour le "user button" 
-const int resetPin         =  6;   // Numéro de la broche reliée à la broche RESET du GPS et ou du Artemis thing plus au choix.
+const int resetPin         =  6;   // Numéro de la broche reliée à la broche RESET du GPS U-BLox ZED-F9R (Pas utilisé pour le moment).
+const int transmitReadyPin =  7;   // Numéro de broche reliée à la broche TXR du GPS U-BLox ZED-F9R (Pas utilisé pour le moment).
 //
 //
 // ***** Variable  *****
@@ -89,12 +91,15 @@ const int resetPin         =  6;   // Numéro de la broche reliée à la broche 
 //
 // ***** Variable pour les interruption ISR
 //
-volatile bool alarmISR_  = false; // Cette variable est assignée à true si l'horloge interne du Apollo génère une interruption ex: "alarme".
-volatile bool buttonISR_ = false; // Cette variable est assigné à true si on appui sur le "user button".
-volatile bool ppsISR_    = false; // Cette variable est assigné à true si le signal PPS en provenance du GPS est détectée.
+volatile bool alarmISR_         = false; // Cette variable est assignée à true si l'horloge interne du Apollo génère une interruption ex: "alarme".
+volatile bool buttonISR_        = false; // Cette variable est assigné à true si on appui sur le "user button".
+volatile bool ppsISR_           = false; // Cette variable est assigné à true si le signal PPS en provenance du GPS est détectée.
+volatile bool TransmitReadyISR_ = false; // Cette variable est assigné à true si le signal Transmit Ready en provenance du GPS U-BLox ZED-F9R est détectée.
+volatile unsigned long horodatePPS = 0;  //  Noter avec la fonction millis() l'arrivé du signal PPS. BUG en cas de rollover du compteur PPS.
 //
-volatile bool watchdogFlag = false; // indicateur Watchdog Timer ISR flag
-volatile int watchdogInterrupt = 0; // Compteur Watchdog interrupt counter
+volatile bool watchdogFlag = false;      // indicateur Watchdog Timer ISR flag
+volatile int watchdogInterrupt = 0;      // Compteur Watchdog interrupt counter
+//
 //
 // ***** autres variables 
 //
@@ -104,59 +109,57 @@ volatile int watchdogInterrupt = 0; // Compteur Watchdog interrupt counter
 ///*********************************************************/
 //
 //
-// ***** Souroutines *****
+// ***** Routines *****
 //
 //
 // Routines de gestion des interruptions
 //
+void ppsISR()                                    // Noter le temps d'arrivée du signal PPS.
+{
+  horodatePPS = millis();
+  ppsISR_ = true;
+}
 //
-void ButtonISR()                     // Usage futur de détection du bouton. Ex: Déclencher un traitement si le bouton est poussé par un usager.
+void ButtonISR()                                 // Usage futur de détection du bouton. Ex: Déclencher un traitement si le bouton est poussé par un usager. (Pas utilisé pour le moment).
 {
   buttonISR_ = true;
 }
 //
 //
-volatile unsigned long eventPPS = 0;
-void ppsISR()                       // Noter le temps d'arrivée du signal PPS.
+void TransmitReadyISR()                         // Noter le signal de la broche TXR (buffer full) du GPS (Pas utilisé pour le moment).
 {
-  eventPPS = millis();
-  ppsISR_ = true;
+  TransmitReadyISR_ = true; 
 }
 //
 //
-extern "C" void am_rtc_isr(void)     // Usage futur de l'horloge en temp réel du Artemis thing plus. Ex: déclenchement d'un traitement par une alarme de l'horloge  ± 4 microsecondes.
-{ 
-  // Effacer RTC alarm interrupt
-  am_hal_rtc_int_clear(AM_HAL_RTC_INT_ALM);
-  alarmISR_ = true;  
-}
 //
+//extern "C" void am_rtc_isr(void)              // Usage futur de l'horloge en temp réel du Artemis thing plus. Ex: déclenchement d'un traitement par une alarme de l'horloge à la seconde près ± 4 microsecondes.
+//{ 
+//  am_hal_rtc_int_clear(AM_HAL_RTC_INT_ALM);   // Effacer RTC alarm interrupt
+//  alarmISR_ = true;  
+//}
 //
-// ***** Appelé une fois dans le MCU est alimenté ou reset *****
+//***************************************************************/
+// ***** Appelé une fois quand le MCU est alimenté ou reset *****/
+//***************************************************************/
 //
-//
-void setup() { 
-  // La pin ResetPin #? est reliée à la pin RESET.
-  // When the application starts up, all pins get pulled LOW. 
-  // This would therefore disable Arduino from every running
-  // BUT, the trick is: in setup() function, the FIRST thing that happens is we write HIGH to the pin resetPIN
-  digitalWrite(resetPin, HIGH );                                        //Le plus rapidement possible mettre à HIGH la pin reliée à la pin RESET
-  //delay(200);                                                         // Enlever le délais de 200 mS il empêche le Artemis thing plus de recevoir le code compilé par Arduino IDE
-  pinMode(resetPin, OUTPUT);                                            // Ensuite en mode OUTPUT
-  //
-  Serial.begin(115200);                                                 // Start USB serial communication
-  while (!Serial);                                                      // Wait for serial connection to open (only necessary on some boards)  //En commentaire au cas ou le port USB du Artemis thing plus ne serait pas branché à un ordi.
-  Serial.print( "INFO, Serial USB=OK" );                                // Confirmation de la disponibilité du port Série USB  "Serial"  
-  Serial1.begin(115200);                                                // Port série UART du Artemis thing plus.  "Serial1"
-  while (!Serial1);                                                     // Wait for serial connection to open (only necessary on some boards).
-  Serial.print( ", Serial1 UART=OK" );                                  // Confirmation de la disponibilité du port Série UART "Serial1"
+void setup() {        // Au démarrare du Artemis thing plus toutes les broches sont "pulled LOW". 
+  byte tempoByte = 0;
+  Serial.begin( 115200 );                                             // Démarrer la communication Serie USB.
+  while ( !Serial );                                                  // Attendre l'ouverture de la communication (nécessaire sur certain board seulement).
+  Serial.print( "Serial USB= OK, " );                                 // Confirmation de la disponibilité du port Série USB  "Serial"  
+  Serial1.begin( 115200 );                                            // Port série UART du Artemis thing plus.  "Serial1"
+  while ( !Serial1 );                                                 // Wait for serial connection to open (only necessary on some boards).
+  Serial.print( "Serial1 UART= OK, " );                               // Confirmation de la disponibilité du port Série UART "Serial1"
   // 
-  pinMode( ppsIntPin, INPUT );                                          //set the IRQ pin as an input pin. do not use INPUT_PULLUP - the ZED-F9R will pull the pin.
-  pinMode(LED_BUILTIN, OUTPUT);                                         // Gestion de la LED bleue à OFF.  
-  attachInterrupt(digitalPinToInterrupt(ppsIntPin), ppsISR, RISING);    // Le ZED-F9R will pull the interrupt pin HIGH when a PPS event is triggered.
-  Serial.println(", PPS Interrupt=OK" );                                // Confirmer le mise en place de l'interruption
-  wdt.stop();
-  delay(500);                                                           // Attendre que le ZED-F9R se stabilise.    
+  pinMode(LED_BUILTIN, OUTPUT);                                       // Gestion de la LED bleue à OFF.  
+  pinMode( ppsIntPin, INPUT );                                        //set the IRQ pin as an input pin. do not use INPUT_PULLUP - the ZED-F9R will pull the pin.
+  attachInterrupt(digitalPinToInterrupt(ppsIntPin), ppsISR, RISING);  // Le ZED-F9R will pull the interrupt pin HIGH when a PPS event is triggered.
+  Serial.print("PPS Interrupt= OK, " );                                // Confirmer le mise en place de l'interruption
+  pinMode( transmitReadyPin, INPUT );                                 //set the IRQ pin as an input pin. do not use INPUT_PULLUP - the ZED-F9R will pull the pin.
+  //
+  while( Serial1.available()){ tempoByte = Serial1.read();}           // Vider le tampon des caractères reçus du GPS pour un démarrage plus propre de loop().
+  Serial.println("Flush RX= OK.");
 }
 //
 //
@@ -165,143 +168,99 @@ void setup() {
 //******************************************************************************************
 //
 //
-void loop() { // La boucle loop() est trop lente pour des SBC de moins de 16 MHz. Mais le Artemis Thing Plus est à 48 MHz
+void loop() { // La boucle loop() est trop lente pour des SBC d'une fréquence <= 16 MHz. Mais le Artemis Thing Plus roule à 48 MHz.
+  // static = La valeur de la variable est conservée entre chaque itération de loop(). Sinon c'est effacé.
+  byte inByte =0;                                 // Caratère courant. 
+  static byte indexMsg = 0;                       // Index du tableau des caractères pour le message courant.
   const byte numChars = 255;                      // Size du Buffer de caractères temporaire pour un message NMEA  Débutant par '$' et se terminant par une fin de ligne. 
   static char receivedChars[numChars];            // Buffer de caractères temporaire pour un message NMEA  Débutant par '$' et se terminant par une fin de ligne. 
-  byte inByte =0;                          // Caratère courant
-  static byte indexMsg = 0;                       // Index du tableau des caractères pour le message courant
-  static bool debutMessage = false;               // Détection du caractère '$'
-  static bool finMessage = false;                 // Détection du caractère de fin de ligne \n - 10 
-  static unsigned long debutCohortePPS = 0;       // Timestamp début des messages pour une seconde donnée PPS, en millisecondes écoulée depuis le dernier powerON ou reset du SBC.
-  static unsigned long finCohortePPS = 0;         // Timestamp fin   des messages pour une seconde donnée PPS, en millisecondes écoulée depuis le dernier powerON ou reset du SBC.
-  static byte NbCohorteTrolLente = 0;
-  //static unsigned long eventPPS = 0;
-  unsigned long DureeTransitCohorte = 0;          // Durée totale en miliseconde du traitement des messages suivant tout suite un PPS.
-  unsigned long DelaisFixPosPPS = 0;              // Delais avant l'arrivée des messages NMEA pour un PPS données ou délais de "Position fix calculation".
-  static unsigned long DeltaUTC = 0;
-  static unsigned long overflowDeltaUTC = 0;
-  static unsigned long lastEventPPS = 0;
-
-//  
-  if (ppsISR_ == true){                                       // Le ZED-F9R rapporte un event PPS
-    //eventPPS = millis();                                      // Prendre note du temp d'arrivée
-    ppsISR_ = false;
-    digitalWrite(LED_BUILTIN, HIGH);                          // Indiquer l'arrivé de la PPS par le LED bleue
-    delay(100);                                               // Délais pour qu'elle soit visible
-    digitalWrite(LED_BUILTIN, LOW);                           // Éteindre la LED bleue
-    }
-  // Ne pas allumer ou éteindre la LED bleue durant la réception des carractères cela fait bugger le délais de traitement de 45 mS à > 1000 mS    
-  if ( Serial1.available()  ) {                               // Y-a-t'il des caractères d'arrivés ?
-    inByte = Serial1.read();                                  // Lire un caractère comme un byte en provenance du GPS ( Serial ligne RX )
-    Serial1.write( inByte );                                  // Écrire ce même caractère vers le data logger         ( Serial ligne TX )
-    if( inByte == '$' ) {                                     // Est-ce un début de message '$' ?
-      //digitalWrite(LED_BUILTIN, LOW); // Visual indication of system reset trigger
-      if(debutCohortePPS== 0 ) {debutCohortePPS = millis();}  // Noter le début de traitmement d'un cohorte de message NMEA (i.e. même PPS timestamp )
-      debutMessage = true;                                    // Alors début de message alors ajuster le flag de début
-      finMessage = false;                                     // C'est un début de message alors annule le flag de fin de message
-      receivedChars[0] = inByte;                              // Enregistre la caractère courant dans le buffer. Le début de message commence toujours à l'indice zéro du tableau      
-      indexMsg = 1;                                           // Prochain caractère à l'index un
-      } else if ( inByte == 10 || indexMsg > 82 ) {           // Sinon fin message LF ou maximum longueur de 82 ? 
-          receivedChars[indexMsg] = 10;                       // Enregistre la caractère courant dans le buffer, Force à LF au cas ou le message > 82 caractères
-          indexMsg++;                                         // incrémente l'index tableau
-          receivedChars[indexMsg] = 0;                        // Ajoute un caractère NULL, pour faciliter traitement avec fonctions de type NULL terminated string.
-          finCohortePPS = millis();
-          if(debutMessage){
-            finMessage = true;}
-          }                                                   // Ne pas incrémenter indexMsg, ce caratère NULL ne fait pas partie de la chaîne et ne doit pas être transmis.
-      else {
-        if ( debutMessage  &&  !finMessage ){                 // Si un message est en cours de détection, accumuler les carractères dans le tableau pour traitement ultérieur
-          receivedChars[indexMsg] = inByte;                   // Enregistre la caractère courant dans le buffer
-          indexMsg++;                                         // incrémente l'index tableau  
-          }
-        }
-    //  
-    // Un caractère est reçu, raité et envoyé.
-    //   Vous avez maintenant entre 2,6 et 5,6 millisecondes pour faire des traitements connexes sans risque de perdre des caractères en réception s'il reste encore des messages de la même cohorte PPS à venir. (32 ou 64 caractères à 155200 bauds)
-    //   Vous avez maintenant 955 millisecondes pour faire des traitements connexes sans risque de perdre des caractères en réception, si tous les messages de la même cohorte PPS sont tous arrivés.
+  static char utcDate[9];                         // Extraction de la Date à partir du message $GNZDA avec la virgule    AAAAMMJJ,
+  static char utcTime[7];                         // Extrsction de l'heure à partir du message $GNRMC avec le point      HHMMSS.
+  static bool debutNMEA = false;                  // Détection du caractère '$'.
+  static bool finNMEA = false;                    // Détection du caractère de fin de ligne \n - 10. 
+  static unsigned long DeltaUTC = 0;              // Correrction du temps UTC de GNZDA pour ajouter le délais PPS-NMEA, le délais de transmission RS-232 et l'imprécision du timer millis().
+  //
+  //  
+  if (ppsISR_ == true){                           // Un event PPS est détecté.
+    //horodatePPS = millis();                     // Cette variable est assignée dans la routine de gestion de l'interruption PPS.
+    ppsISR_ = false;                              // indiqué que le traitement PPS est fait.
+    //Serial1.write('~');
+    digitalWrite(LED_BUILTIN, HIGH);              // Allumer la LED bleue pour indiquer l'arrivé du signal PPS.
+    Serial.print( "PPS" );
+  }//endif ppsISR
+  //
+  if( Serial1.available()) {                                  // Caractères disponibles en provenance du GPS.
+    inByte = Serial1.read();                                  // Lire un caractère comme un byte en provenance du GPS ( Serial1 broche RX en provenance du GPS).
+    Serial1.write( inByte  );                                 // Écrire ce même caractère vers le data logger         ( Serial1 broche TX à destination du data loggeur).
     //
-    if ( debutMessage == true  &&  finMessage == true) {  // Un message complet a été reçu
-      //finCohortePPS = millis();
-      if (receivedChars[0] == '$' && receivedChars[1] == 'G' && receivedChars[2] == 'N' && receivedChars[3] == 'Z' && receivedChars[4] == 'D' && receivedChars[5] == 'A' && receivedChars[6] == ',' ) {
-      /*char * pch;                                         // Pointeur sur un tableau de caractères avec un NULL comme délimiteur de fin de chaîne de caractères alias null terminated string.
-      pch = strstr ( receivedChars, "$GNZDA," );          // Est-ce que la chaîne de caractères "$GNZDA," est présente dans le message reçu courant. 
-      if ( pch != NULL )*/                                 // Si oui alors GO! construction du message $UTC à partir d'un message $GNZDA. Le message $GNZDA est le dernier message d'une cohorte PPS pour u-blox, donc ~955 millisecondes de lousse.
-        Serial1.write( "$UTC,");                          // $UTC,  Nom du message     
-        Serial1.write( &receivedChars[23], 4);            // $GNZDA Année
-        Serial1.write( &receivedChars[20], 2);            // $GNZDA Mois
-        Serial1.write( &receivedChars[17], 3);            // $GNZDA Jour + la virgule
-        Serial1.write( &receivedChars[7], 7);             // $GNZDA HHMMSS + le point
-        //finCohortePPS = millis();                         // Timestamp de la fin du traitement
-        
-        if ( finCohortePPS >= debutCohortePPS) {                                  // Si le message $GNZDA est reçu plus d'une fois par seconde (1 Hz), il faut modifier le code d'ajout du DureeTransitCohorte à l'heure GNZDA. 
-          DureeTransitCohorte =  (unsigned long) (finCohortePPS-debutCohortePPS); // Temps total de traitement avec une protection contre le rollover 
-          } else { DureeTransitCohorte =  (unsigned long) (debutCohortePPS-finCohortePPS); 
-          }
-        if( debutCohortePPS >= eventPPS){
-          DelaisFixPosPPS = (unsigned long) (((debutCohortePPS-eventPPS)*47UL)/46.875);      // Délais avant l'envoi des messages NMEA par le GPS causé par le temps nécessaire pour le calcul de la position.
-        } else { DelaisFixPosPPS =  (unsigned long) (((eventPPS-debutCohortePPS) * 47UL) / 46.875); //  UL après un constante comme 100UL indique un cast (unsigned long)
-        }
-        DeltaUTC = DelaisFixPosPPS + DureeTransitCohorte;
-                                                                // On prend pour acquis de la partie fractionnaire des secondes est toujours zéro = "00" à 1 Hz.
-        if ( DeltaUTC > 999 ){                                  // Bug pour l'instant inexplicable de "900mS" au lieu de "45mS" pour DureeeTransit être >= 900 ms. Regulateur de voltage capricieux ?, attendre 10+ secondes entre les rebranchements de l'alimentation.
-          Serial1.write( "335" );                               // on impose une limite maximale fictive à la durée de transit d'une cohorte.
-          } else {
-              if ( DeltaUTC < 100 ) { Serial1.write( '0'); }    // Format du nombre avec des zéros signaficatifs avant
-              if ( DeltaUTC <  10 ) { Serial1.write( '0'); }    // Format du nombre avec des zéros signaficatifs avant
-              Serial1.print( DeltaUTC );                        // Différentiel entre le temps réel UTC et le temps de transit GPS->Data Loggeur. 
-          }
-        Serial1.write( '0');                                   // Ajout d'un zéro à la 4e position après le point comme le message $UTC de l'Applanix  
-        Serial1.write("\r\n");                                 // Fin de ligne.  13 - Retour de chariot - Carriage Return - \r et 10 - Nouvelle ligne - Line Feed \n
-        Serial1.write("$DELTA,Fix=" );                         // Nouveau message non standard pour afficher le différentiel UTC et temp de traitements pour information seulement.
-        Serial1.print( DelaisFixPosPPS);                       // Le délais causé par le temps de calcul de la position par le GPS après l'envoi du PPS
-        Serial1.print(" mS, Tx=");                             //
-        Serial1.print( DureeTransitCohorte);                   // Le délais de réception et de retransmission des messages NMEA d'une même cohorte PPS.
-        Serial1.print(" mS.");
-        Serial1.write("\r\n");                                 // Fin de ligne.  13 - Retour de chariot - Carriage Return - \r et 10 - Nouvelle ligne - Line Feed \n
+    if( inByte == '$' ) {                                     // Est-ce un début de message '$'
+      debutNMEA = true;                                       // Début de message détecté.
+      finNMEA   = false;                                      // Début message alors annule fin de message.
+      receivedChars[0] = inByte;                              // Enregistre la caractère courant dans le buffer. Le début de message commence toujours à l'indice zéro du tableau      
+      indexMsg = 1;   
+    } else if ( inByte == 10 /*|| indexMsg > 87*/ ) {         // Fin message (Max longueur NMEA = 85, mais U-BLox génère excetionnelement des messages NMEA d'une longueur = 87 et des message vides avec un LF à la fin.  
+        receivedChars[indexMsg] = inByte;                     // Enregistre la caractère courant dans le buffer, Force à LF au cas ou le message > 82 caractères
+        indexMsg++;                                           // incrémente le pointeur du tableau des caractères reçus.
+        finNMEA = true;                                       // Fin de message détectée.
+      }                             
+    else {                                                    // Si un message est en cours de détection, accumuler les carractères dans le tableau pour traitement ultérieur
+      if( debutNMEA){                                         // N'enregistre aucun caractères s'il n'y a pas un début de détecté. On évite le traitement en milieu de message, les lignes vides, les problèmes de transmission.
+        receivedChars[indexMsg] = inByte;                     // Enregistre la caractère courant dans le buffer
+        indexMsg++;                                           // incrémente l'index tableau  
+      }
+    }
+    digitalWrite(LED_BUILTIN, LOW);                           // Éteindre la LED bleue pour indiquer la fin du traitment/remplisssage du tableau.
+    //
+    // Un caractère reçu a été envoyé et traité.
+    // S'il reste des caractères du bloc à recevoir, vous avez entre 2.6 mS et maximum 5.6 mS pour faires des tâches connexes. Sinon il y a risque de perdre des caractères en provenance du GPS (Tampon Serie de 32 à 64 caractères à 155200 bauds)
+    // Si c'est le dernier caratère du bloc vos avez environ 900 mS pavant le prochain PPS pour faire des tâches connexes. Sinon il y a risque de perdre des caractères en provenance du GPS.
+    //
+    if ( debutNMEA &&  finNMEA ) {  // Le message NMEA courant est complet.
+      // Message $GNRMC
+      if (receivedChars[0] == '$' && receivedChars[1] == 'G' && receivedChars[2] == 'N' && receivedChars[3] == 'R' && receivedChars[4] == 'M' && receivedChars[5] == 'C' && receivedChars[6] == ',' ) { // Message "$GNRMC," détecté. Extraire l'heure UTC.
+        /*utcTime[0] = receivedChars[7];        //H
+        utcTime[1] = receivedChars[8];          //H
+        utcTime[2] = receivedChars[9];          //M
+        utcTime[3] = receivedChars[10];         //M
+        utcTime[4] = receivedChars[11];         //S
+        utcTime[5] = receivedChars[12];         //S
+        utcTime[6] = receivedChars[13];         //.  on sauve des mS en utilisant directement receivedChars */
+        // À partir d'ici nous avons la date et l'heure UTC, nou spouvons construire et envoyer le message $UTC.
+        Serial1.write( "$UTC,");                // $UTC,  Nom du message     
+        Serial1.write( &utcDate[0], 9);         // AAAAMMJJ,
+        Serial1.write( &receivedChars[7], 7);   // HHMMSS.
+        //Serial1.write( &utcTime[0], 7);  
+        // La fonction millis() prend 0.718 mS à s'exécutée (temps réel 0.720160 mS).
+        // Les 5 prochains caractères prennent 0.445 mS à transmettre à 115200 bauds (temps réel 0.446339 mS).
+        // Le délais moyen PPS et $UTC est 0.258 mS (delta temps réel 0.000776 mS)
+        // Total 1.167 mS à ajouter pour compenser ce temps de latence. Quand le data loggeur va recevoir le message UTC la précision par rapport au signal PPS est de ± 0.567 mS
+        DeltaUTC = millis() + 1UL - horodatePPS; 
+        if ( DeltaUTC < 100 ) { Serial1.write( '0'); }    // Format du nombre avec des zéros signaficatifs avant
+        if ( DeltaUTC <  10 ) { Serial1.write( '0'); }    // Format du nombre avec des zéros signaficatifs avant
+        Serial1.print( DeltaUTC );                        // Différentiel entre le temps réel UTC et le temps de transit GPS->Data Loggeur. 
+        Serial1.write( "0\r\n");                          // Le 4e chiffre après le point pour les secondes.
+        }//endif $GNRMC,                                  //  Duré totale de l'envoi du message UTC environ 2.4 mS :) :) :)
+      // Message $GNZDA
+      else if (receivedChars[0] == '$' && receivedChars[1] == 'G' && receivedChars[2] == 'N' && receivedChars[3] == 'Z' && receivedChars[4] == 'D' && receivedChars[5] == 'A' && receivedChars[6] == ',' ) { //Message "$GNZDA,"
+        // Peut être entrecouper d'un délais jusqu'à 800 mS à cause de la priorité plus grande accordé au traitement du signal PPS dans le GPS quel celle pour l'envoi des messages NMEA (avant ou pendant ou  après le PPS).
+        // Ce n'est pas grave si le message "$GNZDA," est entrecoupé d'un délais de 900 mS car stratégiquement on ne garde que sa date. 
+        // Raphaël ne fait pas de kayak à 00h00 UTC, car il y a bug extrême ici. Le changement de date est potentiellement retardé d'une seconde à cause de la dérive du PPS dans les messages NMEA :), mais l'heure est toujours bonne.
+        utcDate[0] = receivedChars[23];   //A
+        utcDate[1] = receivedChars[24];   //A
+        utcDate[2] = receivedChars[25];   //A        
+        utcDate[3] = receivedChars[26];   //A
+        utcDate[4] = receivedChars[20];   //M
+        utcDate[5] = receivedChars[21];   //M
+        utcDate[6] = receivedChars[17];   //J
+        utcDate[7] = receivedChars[18];   //J
+        utcDate[8] = receivedChars[27];   //,
+        }//endif $GNZDA,
+      debutNMEA = false;           // Message traité on attend un nouveau message
+      finNMEA = false;                               // Message traité on attend un nouveau message laisse la fin à true et le debut à false pour indiquer qu'un bloc a été entièrement traité et on est en attente du rpochain PPS
+    }//endif debut et fin,
 
-        Serial.write( "$UTC,");                          // $UTC,  Nom du message     
-        Serial.write( &receivedChars[23], 4);            // $GNZDA Année
-        Serial.write( &receivedChars[20], 2);            // $GNZDA Mois
-        Serial.write( &receivedChars[17], 3);            // $GNZDA Jour + la virgule
-        Serial.write( &receivedChars[7], 7);             // $GNZDA HHMMSS + le point
-        Serial.write( "00  :  "); 
-
-        Serial.print( " PPS= ");                                  // Debuggeur moniteur série USB 
-        Serial.print( eventPPS );                               // Horodatage en milliseondes de l'arrivé du signal PPS
-        Serial.write( " Debut= ");
-        Serial.print( debutCohortePPS );                        // Horodatage en milliseondes de l'arrivé du premier caractère '$' des messages NMEA
-        Serial.write( " Fin= ");
-        Serial.print( finCohortePPS );                          // Horodatage en milliseondes de l'arrivé du dernier caractère des messages NMEA
-        Serial.write( " DeltaPPS = ");
-        Serial.print( (unsigned long)  round((((eventPPS -  lastEventPPS)*47UL)/46.859)));
-        Serial.write( " DeltaUTC = " );
-        Serial.print( DeltaUTC );   
-        Serial.print ( "                Nombre de DeltaUTC overflow = " );
-        Serial.println( overflowDeltaUTC );
-        if ( overflowDeltaUTC > 5 ){
-          delay(250);
-          //digitalWrite(resetPin, LOW);                    // Le board Artemis est resetté, l'éxécution s'arrête ici et reprendra à "void setup()""
-          wdt.start();                                        // Le board Artemis est RESET par le Watchdog timer après   ?? secondes (valeur par défaut de WDT)
-          while(true){}
-        }  
-        lastEventPPS = eventPPS;                          // Pour le caclul de la durée entre deux PPS
-        
-        finCohortePPS = 0;                                // Indicateur d'une nouvelle cohorte PPS à la prochaine seconde.
-        debutCohortePPS = 0;                              // Indicateur d'une nouvelle cohorte PPS à la prochaine seconde.
-
-        if (  DeltaUTC >=  500UL ) {                           // Si le temps de traitement des messages NMEA est trop long c'est notre bug. ON RESET le board.  Vérification à chaque PPS
-          overflowDeltaUTC++;
-          Serial1.write( "$ERROR, DeltaUTC >= 500 mS.\r\n" );
-          Serial.println("$ERROR, DeltaUTC >= 500 mS.");
-          } else { if( overflowDeltaUTC >= 1 ) {overflowDeltaUTC--;}}
-        }
-      debutMessage = false;                               // Message traité on attend un nouveau message
-      finMessage = false;                                 // Message traité on attend un nouveau message
-      }        
-    } else {            // S'il n'y a pas de caractères à recevoir on est entre deux cohortes NMEA donc environ 950 mS ou rien ne se passe
-        }
-
-} // end loop
+    } //if find bloc NMEA depuis 10 mS
+}//end loop
 //
 //
 // ++++++++++ FIN DU PROGRAMME ++++++++++
@@ -313,13 +272,12 @@ void loop() { // La boucle loop() est trop lente pour des SBC de moins de 16 MHz
 // Ici faire des chose de non-blocante et pas de niaisage.
 //
 // À 115200 bauds, un caractère est transmis en 86 microsecondes.
-//   À 115200 baud entre chaque caractère reçu, Arduino dispose de 86 microsecondes ou 1276 instructions Arduino pour faire d'autre chose.
-// Le buffer Serial est de 64 caractères, on estime 32 caractères IN et 32 caractères OUT quand le car le flow des données est relativement symétrique.
+//   À 115200 bauds, entre chaque caractère reçu Arduino dispose de 86 microsecondes ou 1276 instructions Arduino pour faire d'autre chose.
+// Le buffer pour les ports séerie est de 64 caractères, on estime 32 caractères IN et 32 caractères OUT car le flot des données est relativement symétrique.
 //   32 caractères * 86 microsecondes =  2,7 millisecondes de lousse.
-//   Ici tous les caractères sont envoyés à mesure de leurs réception, au pif 60 caractères IN et 4 caractères OUT pour le pire cas. Donc un lousse sécuritaire entre 5,34 et 5,69 millisecondes.  
+//   Ici tous les caractères sont envoyés à mesure de leurs réception, au pif 60 caractères IN et 4 caractères OUT pour le pire cas (lors de l'envoi de $UTC). Donc un lousse sécuritaire entre 5,34 et 5,69 millisecondes.  
 // Quand une série complète de messages est reçue (environ 512 caractères ou 45 millisecondes) il reste environ 955 millisecondes d'attente avant la prochaine série associée au PPS suivant.
-//   Durant cette attente pour le prochain PPS c'est à ce moment que le message $UTC est construit de toute pièces à partir du message "$GNZDA,".
-//   Le message "$GNZDA," étant le dernier message de la série à être envoyé, c'est pratique pour faire suivre immédiatemewnt par "$UTC" en profitant du temps libre inter message de 956 millisecondes. 
+//   Le message $UTC est construit et expédié tout de suite après le message $GNRMC en moins de 2.5 mS. On est dans les marges sécuritaires pour ne pas perdre des caractères à cause d'un buffer overflow. 
 //
 // Attention simple guillemet pour le type char et double guillemet pour le type string
 //
@@ -347,14 +305,14 @@ void loop() { // La boucle loop() est trop lente pour des SBC de moins de 16 MHz
 // xor             ^
 // xor_eq          ^=
 //
-// La fonction millis() est basé sur un compteur interne au CPU qui divise la frequence du proceessuer par 1024
+// La fonction millis() est basé sur un compteur interne au CPU qui divise la frequence du processeur par 1024
 // Si le CPU a une fréquence 48 MHz ou 48 000 000 de cycle par secondes
 // Alors 48 000 000 divisé par 1024 donne 46 875 cycle par secondes
 // On as 46 875 divisé par 1000 = 46.875 cycle par millisecondes
 // Le compteur est un nombre entier, donc on arrondi à 47 cycle par milliseconde
 // le ratio de 46.85 divise par 47 donne 0,9973 
 // Donc un tick d'une durée supposé de 1 millisecondes est en réalité 0.9973 milliseconde.
-// Donc 1 000 millisecondes multiplié par le ratio 0,9773 et arrondis donne 977 tick de simili millisecondes pour une durée réelle de 1 000 millisecondes.
+// Donc 1 000 millisecondes multiplié par le ratio 0,9973 et arrondis donne 977 tick de simili millisecondes pour une durée réelle de 1 000 millisecondes.
 //
 //
-// ***** LA VRAI FIN *****
+// ***** LA VRAI FIN - Bonne campagne de mesure Raphaël *****
