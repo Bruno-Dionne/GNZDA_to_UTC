@@ -158,11 +158,12 @@ void setup() {        // Au démarrare du Artemis thing plus toutes les broches 
   pinMode(LED_BUILTIN, OUTPUT);                                       // Gestion de la LED bleue à OFF.  
   pinMode( ppsIntPin, INPUT );                                        //set the IRQ pin as an input pin. do not use INPUT_PULLUP - the ZED-F9R will pull the pin.
   attachInterrupt(digitalPinToInterrupt(ppsIntPin), ppsISR, RISING);  // Le ZED-F9R will pull the interrupt pin HIGH when a PPS event is triggered.
-  Serial.print("PPS Interrupt= OK, " );                                // Confirmer la mise en place de l'interruption
+  Serial.print("PPS Interrupt= OK, " );                               // Confirmer la mise en place de l'interruption
   pinMode( transmitReadyPin, INPUT );                                 //set the IRQ pin as an input pin. do not use INPUT_PULLUP - the ZED-F9R will pull the pin.
-  //
-  while( Serial1.available()){ tempoByte = Serial1.read();}           // Vider le tampon des caractères reçus du GPS pour un démarrage plus propre de loop().
-  Serial.println("Flush RX= OK.");
+  while ( !Serial );                                                  // Attendre l'ouverture de la communication (nécessaire sur certain board seulement).
+  Serial.print( "Serial USB= OK, " );                                 // Confirmation de la disponibilité du port Série USB  "Serial"  
+    while( Serial1.available()){ tempoByte = Serial1.read();}           // Vider le tampon des caractères reçus du GPS pour un démarrage plus propre de loop().
+  Serial.println("Flush RX= OK.");   
 }
 //
 //
@@ -187,20 +188,17 @@ void loop() { // La boucle loop() est trop lente pour des SBC d'une fréquence <
   if (ppsISR_ == true){                           // Un event PPS est détecté.
     //horodatePPS = millis();                     // Cette variable est assignée dans la routine de gestion de l'interruption PPS.
     ppsISR_ = false;                              // indiqué que le traitement PPS est fait.
-    //Serial1.write('~');
+    //Serial1.write('~');                         // Pour débuggé
     digitalWrite(LED_BUILTIN, HIGH);              // Allumer la LED bleue pour indiquer l'arrivé du signal PPS.
-    Serial.write( "PPS -> ");
-    Serial.write( "$UTC,");                // $UTC,  Nom du message     
-    Serial.write( &utcDate[0], 9);         // AAAAMMJJ,
-    Serial.write( &utcTime[0], 7);        // HHMMSS.
-    Serial.write( " + DeltaUTC de ");
-    Serial.print( DeltaUTC );
-    Serial.println( " mS.");
+    Serial.write( "$UTC,");                       // $UTC,  Nom du message     
+    Serial.write( &utcDate[0], 9);                // AAAAMMJJ,
+    Serial.write( &utcTime[0], 7);                // HHMMSS.
+    Serial.printf( ", DeltaUTC( %u mS ).\r\n",DeltaUTC ); // Serial.printf ne fonctionne pas avec tous les boards Arduino. Sinon remplacer par de print/prinln/write.
   }//endif ppsISR
   //
-  if( Serial1.available()) {                                  // Caractères disponibles en provenance du GPS.
+  if( Serial1.available() ) {                                  // Caractères disponibles en provenance du GPS.
     inByte = Serial1.read();                                  // Lire un caractère comme un byte en provenance du GPS ( Serial1 broche RX en provenance du GPS).
-    Serial1.write( inByte  );                                 // Écrire ce même caractère vers le data logger         ( Serial1 broche TX à destination du data loggeur).
+    Serial1.write( inByte /*= Serial1.read() */);                                 // Écrire ce même caractère vers le data logger         ( Serial1 broche TX à destination du data loggeur).
     //
     if( inByte == '$' ) {                                     // Est-ce un début de message '$'
       debutNMEA = true;                                       // Début de message détecté.
@@ -218,15 +216,15 @@ void loop() { // La boucle loop() est trop lente pour des SBC d'une fréquence <
         indexMsg++;                                           // incrémente l'index tableau  
       }
     }
-    digitalWrite(LED_BUILTIN, LOW);                           // Éteindre la LED bleue pour indiquer la fin du traitement/remplissage du tableau.
+    digitalWrite(LED_BUILTIN, LOW);              // Éteindre la LED bleue pour indiquer l'arrivée du bloc de message NMEA suivant le signal PPS.
     //
     // Un caractère reçu a été envoyé et traité.
     // S'il reste des caractères du bloc à recevoir, vous avez entre 2.6 mS et maximum 5.6 mS pour faires des tâches connexes. Sinon il y a risque de perdre des caractères en provenance du GPS (Tampon Serie de 32 à 64 caractères à 155200 bauds)
     // Si c'est le dernier caractère du bloc vos avez environ 900 mS pavant le prochain PPS pour faire des tâches connexes. Sinon il y a risque de perdre des caractères en provenance du GPS.
     //
-    if ( debutNMEA &&  finNMEA ) {  // Le message NMEA courant est complet.
-      // Message $GNRMC
-      if (receivedChars[0] == '$' && receivedChars[1] == 'G' && receivedChars[2] == 'N' && receivedChars[3] == 'R' && receivedChars[4] == 'M' && receivedChars[5] == 'C' && receivedChars[6] == ',' ) { // Message "$GNRMC," détecté. Extraire l'heure UTC.
+    if ( debutNMEA &&  finNMEA ) {                  // Le message NMEA courant est complet.
+      if ( receivedChars[0] == '$' && receivedChars[1] == 'G' && receivedChars[2] == 'N' && receivedChars[3] == 'R' && receivedChars[4] == 'M' && receivedChars[5] == 'C' && receivedChars[6] == ',' ) { // Message "$GNRMC," détecté. Extraire l'heure UTC.
+        digitalWrite(LED_BUILTIN, HIGH);              // Allumer la LED bleue pour indiquer l'arrivé du signal PPS.
         utcTime[0] = receivedChars[7];          //H
         utcTime[1] = receivedChars[8];          //H
         utcTime[2] = receivedChars[9];          //M
@@ -235,6 +233,7 @@ void loop() { // La boucle loop() est trop lente pour des SBC d'une fréquence <
         utcTime[5] = receivedChars[12];         //S
         utcTime[6] = receivedChars[13];         //.  on sauve des mS en utilisant directement receivedChars 
         // À partir d'ici nous avons la date et l'heure UTC, nous pouvons construire et envoyer le message $UTC.
+/*
         Serial1.write( "$UTC,");                // $UTC,  Nom du message     
         Serial1.write( &utcDate[0], 9);         // AAAAMMJJ,
         Serial1.write( &receivedChars[7], 7);   // HHMMSS.
@@ -242,23 +241,24 @@ void loop() { // La boucle loop() est trop lente pour des SBC d'une fréquence <
         // La fonction millis() prend 0.718 mS à s'exécuter (temps réel 0.720160 mS).
         // Les 5 prochains caractères prennent 0.445 mS à transmettre à 115200 bauds (temps réel 0.446339 mS).
         // Le délais moyen PPS et $UTC est 0.258 mS (delta temps réel 0.000776 mS)
-        // Total 1.167 mS à ajouter pour compenser ce temps de latence. Quand le data loggeur va recevoir le message UTC la précision par rapport au signal PPS est de ± 0.567 mS
+        // Total 1.167 mS à ajouter pour le temps de latence. L'heure UTC du message $UTC est à ± 0.5 mS du réel quand le point décimal des heures est reçue par le data loggeur (en moyenne ± 0.3 millisecondes).
         DeltaUTC = millis() + 1UL - horodatePPS; 
         if (DeltaUTC >= 740UL){                             // Si délais anormalement long de 740 mS. Rollover de millis() après 49 jours ? Autres ?
-          Serial.write( "2591\r\n" ); }                      // Impose arbitrairement 259.1 mS. Le ".2591" est facile à chercher dans les logs, car normalement le 4e chiffre après le point est toujours zéro. 
+          Serial1.write( "2591\r\n" ); }                      // Impose arbitrairement 259.1 mS. Le ".2591" est facile à chercher dans les logs, car normalement le 4e chiffre après le point est toujours zéro. 
         else {  
           if ( DeltaUTC < 100 ) { Serial1.write( '0'); }    // Format du nombre avec des zéros significatifs avant
           if ( DeltaUTC <  10 ) { Serial1.write( '0'); }    // Format du nombre avec des zéros significatifs avant
-          Serial1.print( DeltaUTC );                        // Différentiel entre le temps réel UTC et le temps de transit GPS->Data Loggeur. 
-          Serial1.write( "0\r\n");                          // Le 4e chiffre après le point pour les secondes.
-        }  
-        }//endif $GNRMC,                                  //  Duré totale de l'envoi du message UTC environ 2.4 mS :) :) :)
-      // Message $GNZDA
+          Serial1.printf( "%u0\r\n", DeltaUTC );                        // Différentiel entre le temps réel UTC et le temps de transit GPS->Data Loggeur. 
+          //Serial1.write( "0\r\n");                          // Le 4e chiffre après le point pour les secondes.
+
+        }  */
+      }//endif $GNRMC,                                  //  Duré totale de l'envoi du message UTC environ 2.4 mS :) :) :)
       else if (receivedChars[0] == '$' && receivedChars[1] == 'G' && receivedChars[2] == 'N' && receivedChars[3] == 'Z' && receivedChars[4] == 'D' && receivedChars[5] == 'A' && receivedChars[6] == ',' ) { //Message "$GNZDA,"
         // Peut être entrecouper d'un délai jusqu'à 800 mS à cause de la priorité plus grande accordée au traitement du signal PPS dans le GPS quel celle pour l'envoi des messages NMEA (avant ou pendant ou  après le PPS).
         // Ce n'est pas grave si le message "$GNZDA," est entrecoupé d'un délai d'environ 750 mS car stratégiquement on ne garde que sa date. 
         // Raphaël ne fait pas de kayak à 00h00 UTC, car il y a bogue extrême ici. Le changement de date est potentiellement retardé d'une seconde à cause de la dérive du PPS dans les messages NMEA :), mais l'heure est toujours bonne.
         // Autre BOGUE potentiel si tu restes dans to Kayak plus de 49 jours tu risques d'avoir un bogue dans l'heure UTC, car le compteur millis va faire un rollover de 4294967295 à zéro. Désolé ! :)
+        // Extraire la date du message ZDA
         utcDate[0] = receivedChars[23];   //A
         utcDate[1] = receivedChars[24];   //A
         utcDate[2] = receivedChars[25];   //A        
@@ -268,13 +268,25 @@ void loop() { // La boucle loop() est trop lente pour des SBC d'une fréquence <
         utcDate[6] = receivedChars[17];   //J
         utcDate[7] = receivedChars[18];   //J
         utcDate[8] = receivedChars[27];   //,
-        }//endif $GNZDA,
+
+        Serial1.write( "$UTC,");                // $UTC,  Nom du message     
+        Serial1.write( &utcDate[0], 9);         // AAAAMMJJ,
+        Serial1.write( &receivedChars[7], 7);   // HHMMSS.
+        //Serial1.write( &utcTime[0], 7);  
+        // La fonction millis() prend 0.718 mS à s'exécuter (temps réel 0.720160 mS).
+        // Les 5 prochains caractères prennent 0.445 mS à transmettre à 115200 bauds (temps réel 0.446339 mS).
+        // Le délais moyen PPS et $UTC est 0.258 mS (delta temps réel 0.000776 mS)
+        // Total 1.167 mS à ajouter pour le temps de latence. L'heure UTC du message $UTC est à ± 0.5 mS du réel quand le point décimal des heures est reçue par le data loggeur (en moyenne ± 0.3 millisecondes).
+        DeltaUTC = millis() + 1UL - horodatePPS;                              // Si DeltaUTC anormalement long ? Rollover de millis() après 49 jours ? Autres ?
+        if (DeltaUTC >= 800UL) { Serial1.write( "2543\r\n" ); }               // Impose arbitrairement 254.3 mS. Le ".2543" est facile à chercher dans les logs, car normalement le 4e chiffre après le point est toujours zéro.   
+        else if( DeltaUTC > 99){ Serial1.printf( "%u0\r\n", DeltaUTC ); }     // Entre 100 et 799
+        else if( DeltaUTC > 9 ){ Serial1.printf( "0%u0\r\n", DeltaUTC ); }    // Entre 10 et 99
+        else { Serial1.printf( "00%u0\r\n", DeltaUTC ); }                     // Entre 0 et 9
+      }//endif $GNZDA,
       debutNMEA = false;           // Message traité on attend un nouveau message
       finNMEA = false;                               // Message traité on attend un nouveau message laisse la fin à true et le début à false pour indiquer qu'un bloc a été entièrement traité et on est en attente du prochain PPS
     }//endif debut et fin,
-
-
-    } //if find bloc NMEA depuis 10 mS
+  } //endif available()
 }//end loop
 //
 //
